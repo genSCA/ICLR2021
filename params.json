@@ -1,0 +1,19 @@
+{
+  "vae_epoch": 100,
+  "gan_epoch": 100,
+  "test_freq": 5,
+  "batch_size": 50,
+  "num_workers": 8,
+  "trace_path": "path",
+  "image_path": "path",
+  "nc": 3,
+  "vae_lr": 1e-4,
+  "gan_lr": 2e-4,
+  "beta1": 0.5,
+  "vae_dim": 128,
+  "gan_dim": 128,
+  "beta": 1e-4,
+  "lambda": 100,
+  "vae_path": "path",
+  "gan_path": "path"
+}
