@@ -28,18 +28,26 @@ class AE_GAN(object):
 
     def init_model_optimizer(self):
         print('Initializing Model & Optimizer...')
-        self.G = G(nc=self.args['nc'], dim=self.args.['gan_dim'])
+        self.G = G(nc=self.args['nc'], dim=self.args['gan_dim'])
         self.G = torch.nn.DataParallel(self.G).cuda()
+        
         self.optimizerG = torch.optim.Adam(
-            self.G.module.parameters(),
-            lr=self.args.['gan_lr'], betas=(self.args.['beta1'], 0.999)
-            )
-        self.D = D(nc=self.args['nc'], dim=self.args.['gan_dim'])
+                            self.G.module.parameters(),
+                            lr=self.args['gan_lr'],
+                            betas=(self.args['beta1'], 0.999)
+                            )
+
+        self.D = D(nc=self.args['nc'], dim=self.args['gan_dim'])
         self.D = torch.nn.DataParallel(self.D).cuda()
+        
         self.optimizerD = torch.optim.Adam(
-            self.D.module.parameters(),
-            lr=self.args.['gan_lr'], betas=(self.args.['beta1'], 0.999)
-            )
+                            self.D.module.parameters(),
+                            lr=self.args['gan_lr'],
+                            betas=(self.args['beta1'], 0.999)
+                            )
+
+    def set_trace2image(self, func):
+        self.trace2image = func
 
     def load_model(self, path):
         print('Loading Model from %s ...' % (path))
@@ -55,7 +63,7 @@ class AE_GAN(object):
         }
         torch.save(state, path)
 
-    def train(self, VAE_LP, data_loader):
+    def train(self, data_loader):
         print('Training...')
         with torch.autograd.set_detect_anomaly(True):
             self.epoch += 1
@@ -63,7 +71,7 @@ class AE_GAN(object):
             self.D.train()
             record_G = utils.Record()
             record_D = utils.Record()
-            current_time = time.time()
+            start_time = time.time()
             progress = progressbar.ProgressBar(maxval=len(data_loader)).start()
             for i, (trace, image) in enumerate(data_loader):
                 progress.update(i + 1)
@@ -71,53 +79,52 @@ class AE_GAN(object):
                 image = image.cuda()
                 
                 self.D.zero_grad()
-                
+                # update D with real images
                 real_output = self.D(image)
-                
                 err_D_real = self.loss(real_output, self.real_label)
-                err_D_real.backward(retain_graph=True)
                 D_x = real_output.data.mean()
-
-                fake_input, *_ = VAE_LP.inference(trace)
+                # update D with reconstructed images
+                fake_input, *_ = self.trace2image(trace)
                 fake_refine = self.G(fake_input)
                 fake_output = self.D(fake_refine.detach())
-                
                 err_D_fake = self.loss(fake_output, self.fake_label)
-                err_D_fake.backward(retain_graph=True)
                 D_G_z = fake_output.data.mean()
 
                 err_D = err_D_fake + err_D_real
-                optimizerD.step()
+                err_D.backward()
+                self.optimizerD.step()
 
                 self.G.zero_grad()
+                # update G
                 fake_output = self.D(fake_refine)
                 err_G = self.loss(fake_output, self.real_label)
+                
                 err_G.backward()
-                optimizerG.step()
+                self.optimizerG.step()
 
                 record_D.add(err_D.item())
                 record_G.add(err_G.item())
             progress.finish()
             utils.clear_progressbar()
             print('----------------------------------------')
-            print('Epoch: %d' % epoch)
-            print('Costs time: %.2f s' % (time.time() - current_time))
-            print('Error of G is: %f' % (record_G.mean()))
-            print('Error of D is: %f' % (record_D.mean()))
-            print('D(x) is: %f, D(G(z)) is: %f' % (D_x, D_G_z))
+            print('Epoch: %d' % self.epoch)
+            print('Costs time: %.2f s' % (time.time() - start_time))
+            print('Loss of G: %f' % (record_G.mean()))
+            print('Loss of D: %f' % (record_D.mean()))
+            print('D(x): %f, D(G(z)): %f' % (D_x, D_G_z))
+            print('----------------------------------------')
+            utils.save_image(image.data, ('%s/image/test/target_%03d.jpg' % (self.args['gan_dir'], self.epoch)))
+            utils.save_image(trace2image.data, ('%s/image/test/tr2im_%03d.jpg' % (self.args['gan_dir'], self.epoch)))
+            utils.save_image(image2image.data, ('%s/image/test/im2im_%03d.jpg' % (self.args['gan_dir'], self.epoch)))
 
-            utils.save_image(image.data, (self.args['gan_path']+'/image/train/target_%3d.jpg') % epoch)
-            utils.save_image(fake_input.data, (self.args['gan_path']+'/image/train/tr2im_%3d.jpg') % epoch)
-            utils.save_image(fake_refine.data, (self.args['gan_path']+'/image/train/final_%3d.jpg') % epoch)
-
-    def test(self, VAE_LP, data_loader):
+    def test(self, data_loader):
         print('Testing...')
         with torch.no_grad():
             self.G.eval()
             self.D.eval()
             record_G = utils.Record()
             record_D = utils.Record()
-            current_time = time.time()
+            start_time = time.time()
             progress = progressbar.ProgressBar(maxval=len(data_loader)).start()
             for i, (trace, image) in enumerate(data_loader):
                 progress.update(i + 1)
@@ -128,7 +135,7 @@ class AE_GAN(object):
                 err_D_real = self.loss(real_output, self.real_label)
                 D_x = real_output.data.mean()
 
-                fake_input, *_ = VAE_LP.inference(trace)
+                fake_input, *_ = self.trace2image(trace)
                 fake_refine = self.G(fake_input)
                 fake_output = self.D(fake_refine.detach())
                 err_D_fake = self.loss(fake_output, self.fake_label)
@@ -144,19 +151,19 @@ class AE_GAN(object):
             progress.finish()
             utils.clear_progressbar()
             print('----------------------------------------')
-            print('Test at Epoch %d' % epoch)
-            print('Costs time: %.2f s' % (time.time() - current_time))
-            print('Error of G is: %f' % (record_G.mean()))
-            print('Error of D is: %f' % (record_D.mean()))
-            print('D(x) is: %f, D(G(z)) is: %f' % (D_x, D_G_z))
+            print('Test at Epoch %d' % self.epoch)
+            print('Costs time: %.2f s' % (time.time() - start_time))
+            print('Loss of G: %f' % (record_G.mean()))
+            print('Loss of D: %f' % (record_D.mean()))
+            print('D(x): %f, D(G(z)): %f' % (D_x, D_G_z))
+            print('----------------------------------------')
+            utils.save_image(image.data, ('%s/image/test/target_%03d.jpg' % (self.args['gan_dir'], self.epoch)))
+            utils.save_image(trace2image.data, ('%s/image/test/tr2im_%03d.jpg' % (self.args['gan_dir'], self.epoch)))
+            utils.save_image(image2image.data, ('%s/image/test/im2im_%03d.jpg' % (self.args['gan_dir'], self.epoch)))
 
-            utils.save_image(image.data, (self.args['gan_path']+'/image/test/target_%3d.jpg') % epoch)
-            utils.save_image(fake_input.data, (self.args['gan_path']+'/image/test/tr2im_%3d.jpg') % epoch)
-            utils.save_image(fake_refine.data, (self.args['gan_path']+'/image/test/final_%3d.jpg') % epoch)
-
-    def inference(self, VAE_LP, x):
+    def inference(self, trace):
         with torch.no_grad():
             self.G.eval()
-            recov_image = VAE_LP.inference(x)
+            recov_image = self.trace2image(trace)
             final_image = self.G(recov_image)
         return final_image

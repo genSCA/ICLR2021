@@ -4,9 +4,10 @@ irange = range
 import os
 import random
 import shutil
+import json
 
 def load_params(json_file):
-    with open(jsonFile) as f:
+    with open(json_file) as f:
         return json.load(f)
 
 def get_batch(data_loader):
@@ -14,10 +15,22 @@ def get_batch(data_loader):
         for batch in data_loader:
             yield batch
 
+def kl_criterion(mu1, logvar1, mu2, logvar2):
+    # KL( N(mu_1, sigma2_1) || N(mu_2, sigma2_2)) = 
+    #   log( sqrt(
+    bs = mu1.size(0)
+    sigma1 = logvar1.mul(0.5).exp() 
+    sigma2 = logvar2.mul(0.5).exp() 
+    kld = torch.log(sigma2/sigma1) + (torch.exp(logvar1) + (mu1 - mu2)**2)/(2*torch.exp(logvar2)) - 1/2
+    return kld.sum() / bs
+
 def reparameterize(mu, logvar):
     logvar = logvar.mul(0.5).exp_()
-    eps = Variable(logvar.data.new(logvar.size()).normal_())
+    eps = logvar.data.new(logvar.size()).normal_()
     return eps.mul(logvar).add_(mu)
+
+def norm_scale(v, v_max, v_min, low=0, up=1):
+    return (up - low) * (v - v_min) / max(1e-7, v_max - v_min) + low
 
 class data_prefetcher():
     def __init__(self, loader):
@@ -77,7 +90,6 @@ class Record(object):
 def make_grid(tensor, nrow=8, padding=2,
               normalize=False, range=None, scale_each=False, pad_value=0):
     """Make a grid of images.
-
     Args:
         tensor (Tensor or list): 4D mini-batch Tensor of shape (B x C x H x W)
             or a list of images all of the same size.
@@ -92,10 +104,8 @@ def make_grid(tensor, nrow=8, padding=2,
         scale_each (bool, optional): If True, scale each image in the batch of
             images separately rather than the (min, max) over all images.
         pad_value (float, optional): Value for the padded pixels.
-
     Example:
         See this notebook `here <https://gist.github.com/anonymous/bf16430f7750c023141c562f3e9f2a91>`_
-
     """
     if not (torch.is_tensor(tensor) or
             (isinstance(tensor, list) and all(torch.is_tensor(t) for t in tensor))):
@@ -160,7 +170,6 @@ def make_grid(tensor, nrow=8, padding=2,
 def save_image(tensor, filename, nrow=8, padding=2,
                normalize=False, range=None, scale_each=False, pad_value=0):
     """Save a given Tensor into an image file.
-
     Args:
         tensor (Tensor or list): Image to be saved. If given a mini-batch tensor,
             saves the tensor as a grid of images by calling ``make_grid``.
